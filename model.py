@@ -25,7 +25,7 @@ from torch.utils.data.dataset import Dataset
 from torch.autograd import Variable
 from policy import *
 import math
-import markov_clustering as mc
+# import markov_clustering as mc  # unused, no longer installable
 import networkx as nx
 import community  # python-louvain library
 import scipy.sparse as sp
@@ -59,7 +59,7 @@ n = 2
 
 def diffusion_evaluation(adj_matrix, seed, diffusion='LT'):
     total_infect = 0
-    G = nx.from_scipy_sparse_matrix(adj_matrix).to_directed()
+    G = nx.from_scipy_sparse_array(adj_matrix).to_directed()
     values = []
     r = 100
     for i in range(r):
@@ -262,13 +262,21 @@ for node, comm_id in partition.items():
 
 score_model = NodeScoringNN(input_dim = feature_matrix.shape[1], hidden_dim = 128, output_dim = 1)
 
-optimizer = Adam(score_model.parameters(), lr=1e-4)
+# Initialise seed selection at a training seed set. WARM_START_ROW indexes
+# inverse_pairs, the seed sets the surrogate was trained on.
+WARM_START_ROW = 49
+warm_mask = torch.as_tensor(inverse_pairs[WARM_START_ROW][:, 0]).float().reshape(-1, 1)
+seed_offset = torch.nn.Parameter(2.0 * warm_mask)
+
+optimizer = Adam([{'params': score_model.parameters(), 'lr': 1e-4},
+                  {'params': [seed_offset], 'lr': 1e-4}])
 
 for epoch in range(200):
     begin = time.time()
     total_overall = 0
     x_hat = feature_matrix
-    x_i = torch.squeeze(score_model(x_hat, community_tensor, math.ceil(adj.shape[0] *args.seed_rate / 100)))
+    x_i = torch.squeeze(score_model(x_hat, community_tensor, math.ceil(adj.shape[0] *args.seed_rate / 100),
+                                    offset=seed_offset))
     loss = maximization_loss(x_hat, x_i, adj, forward_model,)
     #loss.requires_grad = True 
     loss.backward()

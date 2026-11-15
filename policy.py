@@ -160,7 +160,7 @@ class NodeScoringNN(nn.Module):
         return selected_nodes
     
     
-    def forward(self, x, c, k):
+    def forward(self, x, c, k, offset=None):
         # Forward pass through the network
         x = self.fc1(x)
         x = self.dropout(x)
@@ -168,6 +168,8 @@ class NodeScoringNN(nn.Module):
         x = self.fc2(x)
         #x = self.dropout(x)
         x = self.sigmoid(x)
+        if offset is not None:
+            x = x + offset
         x = self.select_nodes_proportional(x, c, k)
         return x
 
