@@ -260,6 +260,19 @@ for node, comm_id in partition.items():
     community_tensor[node] = comm_id
 
 
+# ---------------------------------------------------------------------------------------------
+# FIXED seed optimisation (warm start kept)
+#  (a) surrogate frozen, eval mode, same attention weighted adjacency it was trained with
+#  (b) straight-through estimator so gradients reach score_model and seed_offset
+#  (c) final selection without dropout
+# ---------------------------------------------------------------------------------------------
+import io, contextlib
+forward_model.eval()
+for p_ in forward_model.parameters():
+    p_.requires_grad_(False)
+_A = sparse_mul(adj, attention()).coalesce()
+adj_att = torch.sparse_coo_tensor(_A.indices(), _A.values().detach(), _A.size())
+
 score_model = NodeScoringNN(input_dim = feature_matrix.shape[1], hidden_dim = 128, output_dim = 1)
 
 # Initialise seed selection at a training seed set. WARM_START_ROW indexes
@@ -268,27 +281,40 @@ WARM_START_ROW = 49
 warm_mask = torch.as_tensor(inverse_pairs[WARM_START_ROW][:, 0]).float().reshape(-1, 1)
 seed_offset = torch.nn.Parameter(2.0 * warm_mask)
 
-optimizer = Adam([{'params': score_model.parameters(), 'lr': 1e-4},
-                  {'params': [seed_offset], 'lr': 1e-4}])
+OPT_LR = 1e-4      # repo value. 1e-2 or 5e-2 let the seeds leave the warm start set
+optimizer = Adam([{'params': score_model.parameters(), 'lr': OPT_LR},
+                  {'params': [seed_offset], 'lr': OPT_LR}])
+budget = math.ceil(adj.shape[0] * args.seed_rate / 100)
+TAU = 0.5
+
+def node_scores(train):
+    score_model.train(train)
+    h = score_model.fc2(score_model.dropout(score_model.fc1(feature_matrix)))
+    return torch.sigmoid(h) + seed_offset
+
+def hard_select(s):
+    with contextlib.redirect_stdout(io.StringIO()):          # select_nodes_proportional prints
+        return score_model.select_nodes_proportional(s, community_tensor, budget)
 
 for epoch in range(200):
     begin = time.time()
-    total_overall = 0
-    x_hat = feature_matrix
-    x_i = torch.squeeze(score_model(x_hat, community_tensor, math.ceil(adj.shape[0] *args.seed_rate / 100),
-                                    offset=seed_offset))
-    loss = maximization_loss(x_hat, x_i, adj, forward_model,)
-    #loss.requires_grad = True 
+    s = node_scores(True)
+    hard = hard_select(s.detach())
+    sel = hard.flatten() > 0
+    sd = s.detach().flatten()
+    thr = 0.5 * (sd[sel].min() + sd[~sel].max())
+    soft = torch.sigmoid((s - thr) / TAU)
+    x_st = hard + (soft - soft.detach())                     # forward: hard 0/1, backward: soft gradient
+    y_hat = forward_model(feature_matrix, adj_att, x_st.flatten(), n)
+    loss = 1 - y_hat.sum() / y_hat.shape[0]                  # same objective as maximization_loss
+    optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    '''for p in score_model.parameters():
-        p.data.clamp_(min=0)'''
     end = time.time()
-    print("Epoch: {}".format(epoch+1), 
-          "\tTotal: {:.4f}".format(loss),
-          "\tTime: {:.4f}".format(end - begin)
-         )
-         
+    print("Epoch: {}".format(epoch+1), "\tTotal: {:.4f}".format(loss), "\tTime: {:.4f}".format(end - begin))
+
+with torch.no_grad():
+    x_i = hard_select(node_scores(False))
 
 
 seed = x_i.cpu().detach().numpy()
