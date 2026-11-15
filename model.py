@@ -260,12 +260,6 @@ for node, comm_id in partition.items():
     community_tensor[node] = comm_id
 
 
-# ---------------------------------------------------------------------------------------------
-# FIXED seed optimisation (warm start kept)
-#  (a) surrogate frozen, eval mode, same attention weighted adjacency it was trained with
-#  (b) straight-through estimator so gradients reach score_model and seed_offset
-#  (c) final selection without dropout
-# ---------------------------------------------------------------------------------------------
 import io, contextlib
 forward_model.eval()
 for p_ in forward_model.parameters():
@@ -281,7 +275,7 @@ WARM_START_ROW = 49
 warm_mask = torch.as_tensor(inverse_pairs[WARM_START_ROW][:, 0]).float().reshape(-1, 1)
 seed_offset = torch.nn.Parameter(2.0 * warm_mask)
 
-OPT_LR = 1e-4      # repo value. 1e-2 or 5e-2 let the seeds leave the warm start set
+OPT_LR = 1e-4     
 optimizer = Adam([{'params': score_model.parameters(), 'lr': OPT_LR},
                   {'params': [seed_offset], 'lr': OPT_LR}])
 budget = math.ceil(adj.shape[0] * args.seed_rate / 100)
