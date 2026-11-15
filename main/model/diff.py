@@ -79,8 +79,12 @@ class DeepSN(nn.Module):
         nn.init.xavier_uniform_(self.kappa_2)
         
     def sparse_mm(self, a, b):
-        indices = a.coalesce().indices()
-        values = a.coalesce().values()
+        # FIX: weight column j of the adjacency by b[j] (the seed indicator), so that
+        # sparse_mm(adj, y) @ x aggregates the features of ACTIVE neighbours.
+        # The original ignored b, so the surrogate output did not depend on the seed set.
+        a = a.coalesce()
+        indices = a.indices()
+        values = a.values() * b[indices[1]]
         return torch.sparse_coo_tensor(indices, values, a.size())
         
 
